@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PrivacyShield — E2EE & Metadata Protection</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg: #0b0f14;
+  --surface: #131920;
+  --surface2: #1a2230;
+  --border: #263040;
+  --accent: #38c9a0;
+  --accent-dim: #1a6e58;
+  --accent-glow: rgba(56,201,160,0.12);
+  --text: #dde6ef;
+  --muted: #7a8fa0;
+  --dim: #3a4a58;
+  --danger: #f05a50;
+  --warn: #e8a020;
+  --ok: #3ec870;
+  --info: #58a8f0;
+  --r: 10px;
+}
+body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; font-size: 15px; min-height: 100vh; }
+.grid-bg {
+  position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image: linear-gradient(rgba(56,201,160,0.025) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(56,201,160,0.025) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+.wrap { max-width: 820px; margin: 0 auto; padding: 2rem 1.25rem 5rem; position: relative; z-index: 1; }
+
+/* HEADER */
+.header { text-align: center; margin-bottom: 2.5rem; }
+.logo { display: inline-flex; align-items: center; gap: 10px; margin-bottom: 0.8rem; }
+.logo-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--accent-dim); display: flex; align-items: center; justify-content: center; font-size: 18px; }
+.logo-name { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 21px; letter-spacing: -0.5px; }
+.logo-name em { color: var(--accent); font-style: normal; }
+.tagline { font-size: 13px; color: var(--muted); font-weight: 300; }
+.badges { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+.badge { font-family: 'DM Mono', monospace; font-size: 10px; background: rgba(56,201,160,0.1); color: var(--accent); border: 1px solid rgba(56,201,160,0.22); border-radius: 20px; padding: 3px 9px; }
+
+/* TABS */
+.tabs { display: grid; grid-template-columns: repeat(4, 1fr); background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 4px; gap: 3px; margin-bottom: 1.25rem; }
+.tab { padding: 8px 4px; border-radius: 7px; border: none; cursor: pointer; font-family: 'DM Sans', sans-serif; font-size: 12.5px; font-weight: 500; background: transparent; color: var(--muted); transition: all 0.15s; text-align: center; line-height: 1.3; }
+.tab.active { background: var(--surface2); color: var(--text); }
+.tab:hover:not(.active) { color: var(--text); }
+.tab .tab-icon { display: block; font-size: 16px; margin-bottom: 2px; }
+
+/* CARDS */
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 1.25rem; margin-bottom: 1rem; }
+.card-title { font-family: 'Syne', sans-serif; font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1rem; display: flex; align-items: center; gap: 8px; }
+.card-title .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.section-label { font-size: 12px; color: var(--muted); margin-bottom: 5px; display: block; }
+
+/* FORMS */
+textarea, input[type=text], input[type=password] { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-family: 'DM Mono', monospace; font-size: 12.5px; padding: 10px; outline: none; transition: border-color 0.15s; line-height: 1.6; resize: vertical; }
+textarea { min-height: 90px; }
+textarea:focus, input:focus { border-color: var(--accent-dim); }
+.field { margin-bottom: 0.9rem; }
+.row2 { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+
+/* BUTTONS */
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 9px 16px; border-radius: 8px; border: none; cursor: pointer; font-family: 'DM Sans', sans-serif; font-size: 13.5px; font-weight: 500; transition: all 0.15s; }
+.btn-primary { background: var(--accent); color: #0b0f14; width: 100%; justify-content: center; font-size: 14px; padding: 12px; margin-top: 4px; }
+.btn-primary:hover { background: #2db88e; transform: translateY(-1px); }
+.btn-primary:active { transform: none; }
+.btn-secondary { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); font-size: 12px; padding: 7px 13px; }
+.btn-secondary:hover { border-color: var(--accent-dim); color: var(--text); }
+.btn-sm { font-size: 11px; padding: 5px 11px; }
+.btn-warn { background: rgba(232,160,32,0.15); color: var(--warn); border: 1px solid rgba(232,160,32,0.3); font-size: 12px; padding: 7px 13px; }
+.btn-warn:hover { background: rgba(232,160,32,0.25); }
+
+/* OUTPUT */
+.out-area { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-family: 'DM Mono', monospace; font-size: 11.5px; color: var(--accent); line-height: 1.7; word-break: break-all; min-height: 60px; max-height: 180px; overflow-y: auto; white-space: pre-wrap; }
+.out-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 7px; }
+.out-label { font-family: 'Syne', sans-serif; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.8px; }
+
+/* ALERTS */
+.alert { border-radius: 8px; padding: 10px 13px; font-size: 13px; display: flex; align-items: flex-start; gap: 9px; margin-top: 0.8rem; line-height: 1.5; }
+.a-ok   { background: rgba(62,200,112,0.08); border: 1px solid rgba(62,200,112,0.22); color: var(--ok); }
+.a-err  { background: rgba(240,90,80,0.08);  border: 1px solid rgba(240,90,80,0.22);  color: var(--danger); }
+.a-info { background: var(--accent-glow);    border: 1px solid rgba(56,201,160,0.2);  color: var(--accent); }
+.a-warn { background: rgba(232,160,32,0.08); border: 1px solid rgba(232,160,32,0.22); color: var(--warn); }
+.hidden { display: none; }
+
+/* METADATA RISK ITEMS */
+.risk-list { display: flex; flex-direction: column; gap: 6px; margin-top: 0.75rem; }
+.risk-item { display: flex; align-items: flex-start; gap: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 9px 12px; font-size: 12.5px; line-height: 1.5; }
+.risk-item.high  { border-color: rgba(240,90,80,0.4);  }
+.risk-item.med   { border-color: rgba(232,160,32,0.4); }
+.risk-item.low   { border-color: rgba(56,201,160,0.3); }
+.risk-badge { font-size: 10px; font-family: 'DM Mono', monospace; padding: 2px 7px; border-radius: 20px; flex-shrink: 0; margin-top: 1px; }
+.risk-badge.high { background: rgba(240,90,80,0.15); color: var(--danger); }
+.risk-badge.med  { background: rgba(232,160,32,0.15); color: var(--warn); }
+.risk-badge.low  { background: rgba(56,201,160,0.12); color: var(--accent); }
+.risk-text strong { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; }
+
+/* GUIDE CARDS */
+.guide-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.guide-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+.guide-card .g-icon { font-size: 20px; margin-bottom: 6px; display: block; }
+.guide-card strong { display: block; font-size: 13.5px; color: var(--text); margin-bottom: 4px; }
+.guide-card p { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.guide-card .channel-row { display: flex; flex-direction: column; gap: 5px; margin-top: 8px; }
+.channel { display: flex; align-items: center; justify-content: space-between; font-size: 12px; padding: 5px 8px; background: var(--surface); border-radius: 5px; }
+.channel .c-label { color: var(--muted); }
+
+/* STEPS */
+.steps { display: flex; flex-direction: column; gap: 2px; counter-reset: step; }
+.step { display: flex; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); align-items: flex-start; }
+.step:last-child { border-bottom: none; }
+.step-num { width: 24px; height: 24px; border-radius: 50%; background: var(--accent-dim); color: var(--accent); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-family: 'DM Mono', monospace; }
+.step-body strong { display: block; font-size: 13.5px; color: var(--text); margin-bottom: 2px; }
+.step-body span { font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+
+/* STRENGTH */
+.str-bar { height: 3px; border-radius: 2px; background: var(--border); margin-top: 5px; overflow: hidden; }
+.str-fill { height: 100%; border-radius: 2px; transition: width 0.25s, background 0.25s; width: 0; }
+.str-note { font-size: 11px; color: var(--dim); margin-top: 3px; }
+
+/* FOOTER INFO */
+.tech-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border); }
+.tech-pill { font-family: 'DM Mono', monospace; font-size: 10.5px; background: var(--surface); border: 1px solid var(--border); color: var(--dim); padding: 4px 9px; border-radius: 20px; }
+.tech-pill em { color: var(--muted); font-style: normal; }
+
+/* TOAST */
+.toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--surface2); border: 1px solid var(--accent-dim); color: var(--accent); padding: 7px 18px; border-radius: 20px; font-size: 12.5px; font-family: 'DM Mono', monospace; opacity: 0; transition: opacity 0.2s; pointer-events: none; z-index: 999; }
+.toast.show { opacity: 1; }
+
+/* DIVIDER */
+.or-divider { display: flex; align-items: center; gap: 10px; margin: 0.75rem 0; color: var(--dim); font-size: 12px; }
+.or-divider::before, .or-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+@media (max-width: 580px) {
+  .tabs { grid-template-columns: repeat(2, 1fr); }
+  .guide-grid { grid-template-columns: 1fr; }
+  .row2 { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="grid-bg"></div>
+<div class="wrap">
+
+<div class="header">
+  <div class="logo">
+    <div class="logo-icon">🔐</div>
+    <div class="logo-name">Privacy<em>Shield</em></div>
+  </div>
+  <p class="tagline">End-to-end encryption + metadata protection for everyone</p>
+  <div class="badges">
+    <span class="badge">ECDH Key Exchange</span>
+    <span class="badge">AES-256-GCM</span>
+    <span class="badge">Metadata Analyzer</span>
+    <span class="badge">Zero-Knowledge</span>
+    <span class="badge">100% In-Browser</span>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('keyx')"><span class="tab-icon">🗝</span>E2EE Keys</button>
+  <button class="tab" onclick="switchTab('enc')"><span class="tab-icon">🔒</span>Encrypt</button>
+  <button class="tab" onclick="switchTab('dec')"><span class="tab-icon">🔓</span>Decrypt</button>
+  <button class="tab" onclick="switchTab('meta')"><span class="tab-icon">🔍</span>Metadata Check</button>
+</div>
+
+<!-- ===================== TAB 1: E2EE KEY EXCHANGE ===================== -->
+<div id="tab-keyx">
+  <div class="card">
+    <div class="card-title"><span class="dot"></span>Step 1 — Generate your E2EE key pair</div>
+    <div class="alert a-info" style="margin-bottom:1rem;">
+      <span>True end-to-end encryption uses asymmetric key pairs. You keep your <strong>private key</strong> secret. You share your <strong>public key</strong> with your contact. Neither of you shares a password — the encryption key is derived mathematically.</span>
+    </div>
+    <button class="btn btn-primary" onclick="generateKeyPair()">🔑 Generate My Key Pair</button>
+  </div>
+
+  <div id="keyx-result" class="hidden">
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>Your public key <span style="font-size:11px;color:var(--ok);margin-left:6px;">✓ Safe to share</span></div>
+      <div class="out-row">
+        <div class="out-label">Share this with your contact</div>
+        <button class="btn btn-secondary btn-sm" onclick="copyEl('out-pubkey')">📋 Copy</button>
+      </div>
+      <div class="out-area" id="out-pubkey" style="color:var(--info);"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>Your private key <span style="font-size:11px;color:var(--danger);margin-left:6px;">⚠ Never share this</span></div>
+      <div class="alert a-warn" style="margin-bottom:0.75rem;">
+        <span>🔒 Store this in a password manager. If lost, you cannot decrypt messages sent to you. If stolen, your messages are compromised.</span>
+      </div>
+      <div class="out-row">
+        <div class="out-label">Your private key</div>
+        <button class="btn btn-secondary btn-sm" onclick="copyEl('out-privkey')">📋 Copy</button>
+      </div>
+      <div class="out-area" id="out-privkey" style="color:var(--danger);"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>Step 2 — Derive shared secret from contact's public key</div>
+      <div class="field">
+        <label class="section-label">Paste your contact's public key here</label>
+        <textarea id="contact-pubkey" rows="3" placeholder="Paste their public key (starts with eyJ...)"></textarea>
+      </div>
+      <button class="btn btn-primary" onclick="deriveShared()">🤝 Derive Shared Encryption Key</button>
+      <div id="shared-ok" class="alert a-ok hidden" style="margin-top:0.8rem;">
+        <span>✅ Shared secret derived successfully. You can now use the <strong>Encrypt</strong> and <strong>Decrypt</strong> tabs with this shared key. This key was never transmitted — it was computed locally from your private key and their public key.</span>
+      </div>
+      <div id="shared-err" class="alert a-err hidden"><span id="shared-err-msg"></span></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:0.5rem;">
+    <div class="card-title"><span class="dot"></span>How E2EE works — the ECDH protocol</div>
+    <div class="steps">
+      <div class="step"><div class="step-num">1</div><div class="step-body"><strong>Key generation</strong><span>You and your contact each generate an ECDH key pair independently.</span></div></div>
+      <div class="step"><div class="step-num">2</div><div class="step-body"><strong>Public key exchange</strong><span>You exchange public keys over any channel (email, chat — even a postcard). Public keys cannot decrypt messages.</span></div></div>
+      <div class="step"><div class="step-num">3</div><div class="step-body"><strong>Shared secret</strong><span>Both parties derive the same shared secret from their own private key + the other's public key. This is the ECDH magic — no secret was ever transmitted.</span></div></div>
+      <div class="step"><div class="step-num">4</div><div class="step-body"><strong>E2EE encryption</strong><span>Messages are encrypted with the shared secret. Only the two key holders can decrypt — not us, not your email provider, not anyone intercepting traffic.</span></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== TAB 2: ENCRYPT ===================== -->
+<div id="tab-enc" class="hidden">
+  <div class="card">
+    <div class="card-title"><span class="dot"></span>Encrypt a message</div>
+
+    <div class="alert a-info" style="margin-bottom:1rem;">
+      <span>Use <strong>E2EE mode</strong> (recommended — requires key exchange above) or <strong>password mode</strong> for quick use.</span>
+    </div>
+
+    <div class="field">
+      <label class="section-label">Message to encrypt</label>
+      <textarea id="enc-input" placeholder="Type or paste your message…" oninput="encCharCount()"></textarea>
+      <div style="display:flex;justify-content:space-between;margin-top:4px;">
+        <span style="font-size:11px;color:var(--dim);" id="enc-chars">0 chars</span>
+        <button class="btn btn-warn btn-sm" onclick="runMetaCheck('enc-input')">🔍 Check metadata first</button>
+      </div>
+    </div>
+
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:0.9rem;">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:500;">Encryption mode</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" id="mode-e2ee" onclick="setMode('e2ee')" style="border-color:var(--accent-dim);color:var(--accent);">🔑 E2EE (ECDH)</button>
+        <button class="btn btn-secondary btn-sm" id="mode-pass" onclick="setMode('pass')">🔒 Password</button>
+      </div>
+    </div>
+
+    <div id="enc-e2ee-info" class="alert a-ok" style="margin-bottom:0.9rem;">
+      <span>✅ Using shared E2EE key from key exchange. No password needed.</span>
+    </div>
+
+    <div id="enc-pass-fields" class="hidden">
+      <div class="field">
+        <label class="section-label">Password</label>
+        <div class="row2">
+          <input type="password" id="enc-pass" placeholder="Enter encryption password…" oninput="checkStrength(this.value)" />
+          <button class="btn btn-secondary btn-sm" onclick="togglePass('enc-pass',this)">Show</button>
+        </div>
+        <div class="str-bar"><div class="str-fill" id="str-fill"></div></div>
+        <div class="str-note" id="str-note">Enter a password</div>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="section-label" style="display:flex;align-items:center;gap:8px;">
+        <input type="checkbox" id="pad-toggle" checked style="width:auto;">
+        Pad message length (metadata protection)
+        <span style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;">[hides true length]</span>
+      </label>
+    </div>
+
+    <button class="btn btn-primary" onclick="encryptMsg()">🔒 Encrypt Message</button>
+  </div>
+
+  <div id="enc-out-wrap" class="hidden">
+    <div class="card">
+      <div class="out-row">
+        <div class="out-label">Encrypted output</div>
+        <button class="btn btn-secondary btn-sm" onclick="copyEl('enc-out')">📋 Copy</button>
+      </div>
+      <div class="out-area" id="enc-out"></div>
+      <div class="alert a-ok" style="margin-top:0.8rem;">
+        <span>✅ Message encrypted. Share the ciphertext via any channel. The encryption key was never transmitted. Remember to send it <em>before</em> checking for metadata.</span>
+      </div>
+    </div>
+  </div>
+  <div id="enc-err" class="alert a-err hidden"><span id="enc-err-msg"></span></div>
+</div>
+
+<!-- ===================== TAB 3: DECRYPT ===================== -->
+<div id="tab-dec" class="hidden">
+  <div class="card">
+    <div class="card-title"><span class="dot"></span>Decrypt a message</div>
+    <div class="field">
+      <label class="section-label">Paste the encrypted ciphertext</label>
+      <textarea id="dec-input" placeholder="Paste the PS1E: or PS1P: message here…" rows="4"></textarea>
+    </div>
+    <div id="dec-pass-wrap">
+      <div class="field" id="dec-pass-field" class="hidden">
+        <label class="section-label">Password (only for password-mode messages)</label>
+        <div class="row2">
+          <input type="password" id="dec-pass" placeholder="Enter decryption password…" />
+          <button class="btn btn-secondary btn-sm" onclick="togglePass('dec-pass',this)">Show</button>
+        </div>
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="decryptMsg()">🔓 Decrypt Message</button>
+  </div>
+  <div id="dec-out-wrap" class="hidden">
+    <div class="card">
+      <div class="out-row">
+        <div class="out-label">Decrypted message</div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-warn btn-sm" onclick="runMetaCheck('dec-out')">🔍 Check metadata</button>
+          <button class="btn btn-secondary btn-sm" onclick="copyEl('dec-out')">📋 Copy</button>
+        </div>
+      </div>
+      <div class="out-area" id="dec-out" style="color:var(--text);"></div>
+      <div class="alert a-ok" style="margin-top:0.8rem;"><span>✅ Decrypted successfully. Run a metadata check before forwarding or storing this message.</span></div>
+    </div>
+  </div>
+  <div id="dec-err" class="alert a-err hidden"><span id="dec-err-msg"></span></div>
+</div>
+
+<!-- ===================== TAB 4: METADATA ===================== -->
+<div id="tab-meta" class="hidden">
+  <div class="card">
+    <div class="card-title"><span class="dot"></span>Metadata analyzer</div>
+    <div class="alert a-warn" style="margin-bottom:1rem;">
+      <span>⚠ <strong>Encryption protects message content, not metadata.</strong> Metadata includes identifiers embedded in your text (email addresses, names, phone numbers, locations) that could reveal who you are even inside an encrypted message.</span>
+    </div>
+    <div class="field">
+      <label class="section-label">Paste text to analyse for privacy risks</label>
+      <textarea id="meta-input" placeholder="Paste your message here before encrypting…" rows="5"></textarea>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn btn-primary" style="flex:1;" onclick="analyzeMetadata()">🔍 Analyse for Metadata Risks</button>
+      <button class="btn btn-warn" onclick="autoRedact()">✂ Auto-Redact Detected Items</button>
+    </div>
+  </div>
+
+  <div id="meta-results" class="hidden">
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>Analysis results</div>
+      <div id="meta-summary"></div>
+      <div id="meta-risk-list" class="risk-list"></div>
+    </div>
+    <div class="card">
+      <div class="card-title"><span class="dot"></span>Clean version (redacted)</div>
+      <div class="out-row">
+        <div class="out-label">Copy this to encrypt instead</div>
+        <button class="btn btn-secondary btn-sm" onclick="copyEl('meta-clean')">📋 Copy</button>
+      </div>
+      <div class="out-area" id="meta-clean" style="color:var(--text);"></div>
+    </div>
+  </div>
+  <div id="meta-ok" class="alert a-ok hidden" style="margin-top:0.5rem;">
+    <span>✅ No obvious metadata risks detected. Your message appears clean. You may proceed to encrypt it.</span>
+  </div>
+
+  <div class="card" style="margin-top:0.5rem;">
+    <div class="card-title"><span class="dot"></span>What is metadata and why does it matter?</div>
+    <div class="guide-grid">
+      <div class="guide-card">
+        <span class="g-icon">📧</span>
+        <strong>Content metadata</strong>
+        <p>Email addresses, usernames, phone numbers, and real names embedded in your message can identify you even after encryption.</p>
+      </div>
+      <div class="guide-card">
+        <span class="g-icon">📍</span>
+        <strong>Location metadata</strong>
+        <p>Street addresses, city names, GPS coordinates, or landmark references can reveal where you are or where you've been.</p>
+      </div>
+      <div class="guide-card">
+        <span class="g-icon">⏱</span>
+        <strong>Timing metadata</strong>
+        <p>Even if content is encrypted, <em>when</em> you send a message, to whom, and how often, is visible to network observers. Use anonymising networks like Tor for high-risk communications.</p>
+      </div>
+      <div class="guide-card">
+        <span class="g-icon">📡</span>
+        <strong>Channel metadata</strong>
+        <p>Your IP address, device fingerprint, and operating system are visible when you connect to any online service. Encryption does not hide these.</p>
+      </div>
+    </div>
+
+    <div style="margin-top:1rem;">
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:500;">Channel security comparison</div>
+      <div class="guide-card" style="background:var(--bg);">
+        <div class="channel-row">
+          <div class="channel"><span class="c-label">Unencrypted email (Gmail, Yahoo)</span><span style="color:var(--danger);font-size:11px;">⛔ Not safe</span></div>
+          <div class="channel"><span class="c-label">Standard SMS / WhatsApp</span><span style="color:var(--warn);font-size:11px;">⚠ Partial</span></div>
+          <div class="channel"><span class="c-label">PrivacyShield + Tor Browser</span><span style="color:var(--ok);font-size:11px;">✅ Strong</span></div>
+          <div class="channel"><span class="c-label">Signal (default E2EE + metadata-minimal)</span><span style="color:var(--ok);font-size:11px;">✅ Strong</span></div>
+          <div class="channel"><span class="c-label">In-person with no devices present</span><span style="color:var(--accent);font-size:11px;">✅ Maximum</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TECH FOOTER -->
+<div class="tech-row">
+  <div class="tech-pill"><em>E2EE:</em> ECDH P-256</div>
+  <div class="tech-pill"><em>Encryption:</em> AES-256-GCM</div>
+  <div class="tech-pill"><em>KDF:</em> PBKDF2-SHA-256 (310k)</div>
+  <div class="tech-pill"><em>IV:</em> Random 96-bit nonce</div>
+  <div class="tech-pill"><em>Padding:</em> ISO/IEC 7816-4</div>
+  <div class="tech-pill"><em>Processing:</em> 100% in-browser</div>
+  <div class="tech-pill"><em>Storage:</em> Zero persistence</div>
+</div>
+</div>
+
+<div class="toast" id="toast">Copied to clipboard!</div>
+
+<script>
+// ==================== STATE ====================
+let myPrivKey = null, myPubKey = null, sharedKey = null, encMode = 'e2ee';
+
+// ==================== TAB SWITCHING ====================
+function switchTab(t) {
+  ['keyx','enc','dec','meta'].forEach((id,i) => {
+    document.getElementById('tab-'+id).classList.toggle('hidden', id !== t);
+    document.querySelectorAll('.tab')[i].classList.toggle('active', id === t);
+  });
+}
+
+// ==================== UTILS ====================
+function b64(buf) { return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function unb64(s) { const b=atob(s); const u=new Uint8Array(b.length); for(let i=0;i<b.length;i++)u[i]=b.charCodeAt(i); return u; }
+function rand(n) { return crypto.getRandomValues(new Uint8Array(n)); }
+function enc(s) { return new TextEncoder().encode(s); }
+function dec(b) { return new TextDecoder().decode(b); }
+async function copyEl(id) {
+  const t = document.getElementById(id).textContent;
+  await navigator.clipboard.writeText(t).catch(()=>{});
+  const toast = document.getElementById('toast');
+  toast.classList.add('show');
+  setTimeout(()=>toast.classList.remove('show'), 1800);
+}
+function showHide(id, selector, msg) {
+  const el = document.getElementById(id);
+  el.classList.toggle('hidden', !selector);
+  if (msg && selector) el.querySelector && (el.querySelector('[id$="-msg"]') || {}).textContent, el.textContent;
+}
+function setErr(prefix, msg) {
+  document.getElementById(prefix+'-err').classList.remove('hidden');
+  document.getElementById(prefix+'-err-msg').textContent = msg;
+}
+function clearErr(prefix) { document.getElementById(prefix+'-err').classList.add('hidden'); }
+function togglePass(id, btn) {
+  const el = document.getElementById(id);
+  el.type = el.type === 'password' ? 'text' : 'password';
+  btn.textContent = el.type === 'password' ? 'Show' : 'Hide';
+}
+
+// ==================== ECDH KEY PAIR ====================
+async function generateKeyPair() {
+  const pair = await crypto.subtle.generateKey({ name:'ECDH', namedCurve:'P-256' }, true, ['deriveKey','deriveBits']);
+  myPrivKey = pair.privateKey; myPubKey = pair.publicKey;
+  const pubJwk = await crypto.subtle.exportKey('jwk', myPubKey);
+  const privJwk = await crypto.subtle.exportKey('jwk', myPrivKey);
+  document.getElementById('out-pubkey').textContent = btoa(JSON.stringify(pubJwk));
+  document.getElementById('out-privkey').textContent = btoa(JSON.stringify(privJwk));
+  document.getElementById('keyx-result').classList.remove('hidden');
+  // auto-set shared key if only one party (self-test mode with same key)
+}
+
+async function deriveShared() {
+  document.getElementById('shared-ok').classList.add('hidden');
+  document.getElementById('shared-err').classList.add('hidden');
+  const raw = document.getElementById('contact-pubkey').value.trim();
+  if (!raw) { document.getElementById('shared-err-msg').textContent = 'Please paste your contact\'s public key.'; document.getElementById('shared-err').classList.remove('hidden'); return; }
+  if (!myPrivKey) { document.getElementById('shared-err-msg').textContent = 'Generate your own key pair first (Step 1).'; document.getElementById('shared-err').classList.remove('hidden'); return; }
+  try {
+    const jwk = JSON.parse(atob(raw));
+    const contactPub = await crypto.subtle.importKey('jwk', jwk, { name:'ECDH', namedCurve:'P-256' }, false, []);
+    sharedKey = await crypto.subtle.deriveKey(
+      { name:'ECDH', public: contactPub },
+      myPrivKey,
+      { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']
+    );
+    document.getElementById('shared-ok').classList.remove('hidden');
+    document.getElementById('enc-e2ee-info').classList.remove('hidden');
+    document.getElementById('enc-e2ee-info').querySelector('span').textContent = '✅ Shared E2EE key derived from ECDH. No password needed.';
+  } catch(e) {
+    document.getElementById('shared-err-msg').textContent = 'Invalid public key format. Make sure you copied the full key without modification.';
+    document.getElementById('shared-err').classList.remove('hidden');
+  }
+}
+
+// ==================== ENCRYPT MODE ====================
+function setMode(m) {
+  encMode = m;
+  document.getElementById('mode-e2ee').style.borderColor = m==='e2ee' ? 'var(--accent-dim)' : '';
+  document.getElementById('mode-e2ee').style.color = m==='e2ee' ? 'var(--accent)' : '';
+  document.getElementById('mode-pass').style.borderColor = m==='pass' ? 'var(--accent-dim)' : '';
+  document.getElementById('mode-pass').style.color = m==='pass' ? 'var(--accent)' : '';
+  document.getElementById('enc-e2ee-info').classList.toggle('hidden', m !== 'e2ee');
+  document.getElementById('enc-pass-fields').classList.toggle('hidden', m !== 'pass');
+}
+
+function encCharCount() {
+  const v = document.getElementById('enc-input').value;
+  document.getElementById('enc-chars').textContent = v.length + ' chars';
+}
+
+// ==================== PADDING ====================
+function padMsg(plainBytes, blockSize=256) {
+  const padLen = blockSize - ((plainBytes.length + 1) % blockSize);
+  const padded = new Uint8Array(plainBytes.length + 1 + padLen);
+  padded.set(plainBytes);
+  padded[plainBytes.length] = 0x80; // ISO 7816-4 padding marker
+  return padded;
+}
+function unpadMsg(padded) {
+  for (let i = padded.length - 1; i >= 0; i--) {
+    if (padded[i] === 0x80) return padded.slice(0, i);
+  }
+  return padded;
+}
+
+// ==================== PBKDF2 ====================
+async function pbkdf2Key(password, salt) {
+  const km = await crypto.subtle.importKey('raw', enc(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey({ name:'PBKDF2', salt, iterations:310000, hash:'SHA-256' }, km, { name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+}
+
+// ==================== ENCRYPT ====================
+async function encryptMsg() {
+  clearErr('enc');
+  document.getElementById('enc-out-wrap').classList.add('hidden');
+  const plaintext = document.getElementById('enc-input').value;
+  if (!plaintext.trim()) { setErr('enc','Please enter a message to encrypt.'); return; }
+
+  const pad = document.getElementById('pad-toggle').checked;
+  let plainBytes = enc(plaintext);
+  if (pad) plainBytes = padMsg(plainBytes);
+
+  try {
+    let key, prefix;
+    if (encMode === 'e2ee') {
+      if (!sharedKey) { setErr('enc','No E2EE shared key found. Complete key exchange in the E2EE Keys tab first, or switch to Password mode.'); return; }
+      key = sharedKey; prefix = 'PS1E:';
+    } else {
+      const pass = document.getElementById('enc-pass').value;
+      if (pass.length < 6) { setErr('enc','Password must be at least 6 characters.'); return; }
+      const salt = rand(16);
+      key = await pbkdf2Key(pass, salt);
+      const iv2 = rand(12);
+      const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv:iv2 }, key, plainBytes);
+      const out = new Uint8Array(1 + 16 + 12 + ct.byteLength);
+      out[0] = pad ? 1 : 0;
+      out.set(salt, 1); out.set(iv2, 17);
+      out.set(new Uint8Array(ct), 29);
+      document.getElementById('enc-out').textContent = 'PS1P:' + b64(out.buffer);
+      document.getElementById('enc-out-wrap').classList.remove('hidden');
+      return;
+    }
+    const iv = rand(12);
+    const ct = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, plainBytes);
+    const out = new Uint8Array(1 + 12 + ct.byteLength);
+    out[0] = pad ? 1 : 0;
+    out.set(iv, 1);
+    out.set(new Uint8Array(ct), 13);
+    document.getElementById('enc-out').textContent = prefix + b64(out.buffer);
+    document.getElementById('enc-out-wrap').classList.remove('hidden');
+  } catch(e) { setErr('enc', 'Encryption failed: ' + e.message); }
+}
+
+// ==================== DECRYPT ====================
+async function decryptMsg() {
+  clearErr('dec');
+  document.getElementById('dec-out-wrap').classList.add('hidden');
+  const cipher = document.getElementById('dec-input').value.trim();
+  if (!cipher) { setErr('dec','Please paste an encrypted message.'); return; }
+
+  try {
+    if (cipher.startsWith('PS1E:')) {
+      if (!sharedKey) { setErr('dec','No E2EE shared key. Complete key exchange in the E2EE Keys tab first.'); return; }
+      const bytes = unb64(cipher.slice(5));
+      const padded = bytes[0] === 1;
+      const iv = bytes.slice(1, 13);
+      const ct = bytes.slice(13);
+      const plain = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, sharedKey, ct);
+      const result = padded ? unpadMsg(new Uint8Array(plain)) : new Uint8Array(plain);
+      document.getElementById('dec-out').textContent = dec(result);
+      document.getElementById('dec-out-wrap').classList.remove('hidden');
+    } else if (cipher.startsWith('PS1P:')) {
+      const pass = document.getElementById('dec-pass').value;
+      if (!pass) { setErr('dec','This is a password-encrypted message. Please enter the password.'); return; }
+      const bytes = unb64(cipher.slice(5));
+      const padded = bytes[0] === 1;
+      const salt = bytes.slice(1, 17);
+      const iv = bytes.slice(17, 29);
+      const ct = bytes.slice(29);
+      const key = await pbkdf2Key(pass, salt);
+      const plain = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, ct);
+      const result = padded ? unpadMsg(new Uint8Array(plain)) : new Uint8Array(plain);
+      document.getElementById('dec-out').textContent = dec(result);
+      document.getElementById('dec-out-wrap').classList.remove('hidden');
+    } else {
+      setErr('dec','Unrecognised format. Message must start with PS1E: (E2EE) or PS1P: (password).');
+    }
+  } catch(e) { setErr('dec','Decryption failed. Wrong key/password or corrupted message.'); }
+}
+
+// ==================== METADATA ANALYZER ====================
+const META_PATTERNS = [
+  { id:'email',    label:'Email address',    regex:/\b[\w.+-]+@[\w-]+\.[a-z]{2,}\b/gi,                     risk:'high',  advice:'Remove or replace with a pseudonym. Real email addresses uniquely identify you.' },
+  { id:'phone',    label:'Phone number',     regex:/(\+?\d[\d\s\-().]{6,}\d)/g,                             risk:'high',  advice:'Replace with a code word agreed in advance.' },
+  { id:'url',      label:'URL / domain',     regex:/https?:\/\/[^\s]+|www\.[^\s]+/gi,                       risk:'med',   advice:'URLs may contain tracking parameters or reveal browsing history.' },
+  { id:'ip',       label:'IP address',       regex:/\b(\d{1,3}\.){3}\d{1,3}\b/g,                            risk:'high',  advice:'IP addresses can reveal your location and ISP.' },
+  { id:'fullname', label:'Full name pattern',regex:/\b([A-Z][a-z]+\s[A-Z][a-z]+)\b/g,                      risk:'med',   advice:'Names in messages can link encrypted content back to real identities.' },
+  { id:'location', label:'Street / address', regex:/\b\d+\s+[A-Z][a-z]+\s+(Street|St|Road|Rd|Avenue|Ave|Lane|Ln|Drive|Dr|Boulevard|Blvd)\b/gi, risk:'high', advice:'Physical addresses are strong identifiers.' },
+  { id:'postcode', label:'Postcode / ZIP',   regex:/\b([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}|\d{5}(-\d{4})?)\b/g, risk:'high', advice:'Postcodes can pinpoint your location.' },
+  { id:'date',     label:'Specific date',    regex:/\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/g,              risk:'low',   advice:'Specific dates may correlate with known events and narrow down authorship.' },
+];
+
+function analyzeMetadata() {
+  const text = document.getElementById('meta-input').value;
+  document.getElementById('meta-ok').classList.add('hidden');
+  document.getElementById('meta-results').classList.add('hidden');
+  if (!text.trim()) return;
+
+  let found = [];
+  META_PATTERNS.forEach(p => {
+    const matches = [...text.matchAll(p.regex)];
+    if (matches.length) found.push({ ...p, matches: [...new Set(matches.map(m=>m[0]))] });
+  });
+
+  if (found.length === 0) {
+    document.getElementById('meta-ok').classList.remove('hidden');
+    return;
+  }
+
+  const summary = document.getElementById('meta-summary');
+  const high = found.filter(f=>f.risk==='high').length;
+  summary.innerHTML = `<div class="alert ${high>0?'a-err':found.length>0?'a-warn':'a-ok'}" style="margin-bottom:0.75rem;">
+    <span>${high>0?'⛔':'⚠'} Found <strong>${found.length} type${found.length>1?'s':''}</strong> of metadata risk 
+    (${found.filter(f=>f.risk==='high').length} high, ${found.filter(f=>f.risk==='med').length} medium, ${found.filter(f=>f.risk==='low').length} low). 
+    Consider removing or replacing before encrypting.</span></div>`;
+
+  const list = document.getElementById('meta-risk-list');
+  list.innerHTML = found.map(f => `
+    <div class="risk-item ${f.risk}">
+      <span class="risk-badge ${f.risk}">${f.risk.toUpperCase()}</span>
+      <div class="risk-text">
+        <strong>${f.label}</strong>
+        Detected: <code style="font-family:'DM Mono',monospace;font-size:11.5px;">${f.matches.slice(0,3).join(', ')}${f.matches.length>3?' … +' + (f.matches.length-3) + ' more':''}</code>
+        <br><span style="color:var(--muted);font-size:12px;">${f.advice}</span>
+      </div>
+    </div>`).join('');
+
+  // Build redacted text
+  let clean = text;
+  META_PATTERNS.forEach(p => {
+    clean = clean.replace(p.regex, m => '[REDACTED-' + p.label.toUpperCase().replace(/ /g,'_') + ']');
+  });
+  document.getElementById('meta-clean').textContent = clean;
+  document.getElementById('meta-results').classList.remove('hidden');
+}
+
+function autoRedact() {
+  let text = document.getElementById('meta-input').value;
+  META_PATTERNS.forEach(p => {
+    text = text.replace(p.regex, m => '[REDACTED]');
+  });
+  document.getElementById('meta-input').value = text;
+  analyzeMetadata();
+}
+
+function runMetaCheck(sourceId) {
+  switchTab('meta');
+  const src = document.getElementById(sourceId);
+  if (src) document.getElementById('meta-input').value = src.textContent || src.value || '';
+}
+
+// ==================== PASSWORD STRENGTH ====================
+function checkStrength(p) {
+  const fill = document.getElementById('str-fill'), note = document.getElementById('str-note');
+  let s = 0;
+  if (p.length >= 8) s++; if (p.length >= 16) s++;
+  if (/[A-Z]/.test(p)) s++; if (/[0-9]/.test(p)) s++; if (/[^A-Za-z0-9]/.test(p)) s++;
+  const lvl = p.length===0 ? 0 : Math.min(s,5);
+  const cfg = [{w:'0%',c:'',t:'Enter a password'},{w:'20%',c:'#f05a50',t:'Very weak'},{w:'45%',c:'#e8a020',t:'Fair — add numbers or symbols'},{w:'65%',c:'#e8a020',t:'Moderate'},{w:'85%',c:'#3ec870',t:'Strong'},{w:'100%',c:'#38c9a0',t:'Very strong ✓'}];
+  fill.style.width = cfg[lvl].w; fill.style.background = cfg[lvl].c; note.textContent = cfg[lvl].t;
+}
+
+// init
+setMode('e2ee');
+document.getElementById('dec-pass-field') && document.getElementById('dec-pass-field').classList.remove('hidden');
+</script>
+</body>
+</html>

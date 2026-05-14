@@ -1,0 +1,743 @@
+#!/usr/bin/env python3
+"""
+PrivacyShield v3 - Python CLI
+Security and Privacy Module | Project 13
+
+Usable end-to-end encryption and metadata protection for non-expert users.
+
+Backend uses:
+  - cryptography library (wraps OpenSSL) for AES-256-GCM and PBKDF2
+  - python-gnupg for GPG key management and alternative encryption path
+  - Designed to run on Kali Linux (or any Debian-based system)
+
+Usage:
+    python3 privacyshield.py --help
+"""
+
+import os
+import sys
+import json
+import base64
+import argparse
+import getpass
+import datetime
+
+# cryptography library (OpenSSL bindings)
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric.ec import (
+    ECDH, generate_private_key, SECP256R1,
+    EllipticCurvePrivateKey, EllipticCurvePublicKey
+)
+from cryptography.hazmat.backends import default_backend
+
+# GnuPG integration
+try:
+    import gnupg
+    GPG_AVAILABLE = True
+except ImportError:
+    GPG_AVAILABLE = False
+
+# ─────────────────────────────────────────────
+# CONSTANTS
+# ─────────────────────────────────────────────
+PBKDF2_ITERATIONS = 310_000   # OWASP 2023 recommendation
+SALT_BYTES        = 16        # 128-bit random salt
+IV_BYTES          = 12        # 96-bit GCM nonce
+PAD_BLOCK         = 256       # ISO/IEC 7816-4 padding block size
+VERSION_E2EE      = b"PS1E:"
+VERSION_PASS      = b"PS1P:"
+
+# ─────────────────────────────────────────────
+# COLOUR OUTPUT (for Kali Linux terminal)
+# ─────────────────────────────────────────────
+class C:
+    GREEN  = "\033[92m"
+    YELLOW = "\033[93m"
+    RED    = "\033[91m"
+    CYAN   = "\033[96m"
+    BOLD   = "\033[1m"
+    DIM    = "\033[2m"
+    RESET  = "\033[0m"
+
+def ok(msg):    print(f"{C.GREEN}[+]{C.RESET} {msg}")
+def warn(msg):  print(f"{C.YELLOW}[!]{C.RESET} {msg}")
+def err(msg):   print(f"{C.RED}[-]{C.RESET} {msg}", file=sys.stderr)
+def info(msg):  print(f"{C.CYAN}[*]{C.RESET} {msg}")
+def head(msg):  print(f"\n{C.BOLD}{C.CYAN}{msg}{C.RESET}")
+
+def banner():
+    print(f"""
+{C.CYAN}{C.BOLD}
+  ██████╗ ██████╗ ██╗██╗   ██╗ █████╗  ██████╗██╗   ██╗
+  ██╔══██╗██╔══██╗██║██║   ██║██╔══██╗██╔════╝╚██╗ ██╔╝
+  ██████╔╝██████╔╝██║██║   ██║███████║██║      ╚████╔╝ 
+  ██╔═══╝ ██╔══██╗██║╚██╗ ██╔╝██╔══██║██║       ╚██╔╝  
+  ██║     ██║  ██║██║ ╚████╔╝ ██║  ██║╚██████╗   ██║   
+  ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═══╝  ╚═╝  ╚═╝ ╚═════╝   ╚═╝  
+  {C.RESET}{C.DIM}PrivacyShield v3 — Security and Privacy Module, Project 13
+  Python CLI | OpenSSL (via cryptography) + GnuPG backend
+{C.RESET}""")
+
+
+# ─────────────────────────────────────────────
+# KEY MANAGEMENT (ECDH via OpenSSL)
+# ─────────────────────────────────────────────
+
+def generate_keypair() -> tuple:
+    """
+    Generate an ECDH P-256 key pair using OpenSSL (via cryptography library).
+    Returns (private_key, public_key) as cryptography objects.
+    """
+    private_key = generate_private_key(SECP256R1(), default_backend())
+    public_key  = private_key.public_key()
+    return private_key, public_key
+
+
+def export_public_key(public_key: EllipticCurvePublicKey) -> str:
+    """Serialise public key to PEM format (OpenSSL standard)."""
+    pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    return pem.decode()
+
+
+def export_private_key(private_key: EllipticCurvePrivateKey, password: bytes = None) -> str:
+    """
+    Serialise private key to PEM format, optionally encrypted with AES-256-CBC.
+    Using password=None stores it unencrypted (not recommended for production).
+    """
+    encryption = (
+        serialization.BestAvailableEncryption(password)
+        if password else
+        serialization.NoEncryption()
+    )
+    pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=encryption
+    )
+    return pem.decode()
+
+
+def load_public_key(pem_str: str) -> EllipticCurvePublicKey:
+    """Load a PEM public key (OpenSSL format)."""
+    return serialization.load_pem_public_key(pem_str.encode(), backend=default_backend())
+
+
+def load_private_key(pem_str: str, password: bytes = None) -> EllipticCurvePrivateKey:
+    """Load a PEM private key, decrypting if a password is provided."""
+    return serialization.load_pem_private_key(
+        pem_str.encode(), password=password, backend=default_backend()
+    )
+
+
+def save_keypair(private_key, public_key, output_dir: str, password: bytes = None):
+    """Save key pair as PEM files in output_dir."""
+    os.makedirs(output_dir, exist_ok=True)
+    pub_path  = os.path.join(output_dir, "public_key.pem")
+    priv_path = os.path.join(output_dir, "private_key.pem")
+    with open(pub_path,  "w") as f:
+        f.write(export_public_key(public_key))
+    with open(priv_path, "w") as f:
+        f.write(export_private_key(private_key, password))
+    ok(f"Public key saved  : {pub_path}")
+    ok(f"Private key saved : {priv_path}")
+    if password:
+        ok("Private key is password-protected (AES-256-CBC)")
+
+
+def derive_shared_secret(private_key, peer_public_key) -> bytes:
+    """
+    Perform ECDH key agreement using OpenSSL.
+    Returns 32 raw bytes of shared secret material.
+    """
+    shared_key_material = private_key.exchange(ECDH(), peer_public_key)
+    # Derive a proper AES-256 key from the raw shared material using HKDF
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=None,
+        info=b"PrivacyShield-v3-ECDH",
+        backend=default_backend()
+    )
+    return hkdf.derive(shared_key_material)
+
+
+def fingerprint(public_key) -> str:
+    """
+    Compute SHA-256 fingerprint of a public key.
+    Displayed as colon-separated hex pairs (OpenSSL style).
+    """
+    pub_bytes = public_key.public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    digest = hashes.Hash(hashes.SHA256(), backend=default_backend())
+    digest.update(pub_bytes)
+    raw = digest.finalize()
+    return ":".join(f"{b:02X}" for b in raw)
+
+
+# ─────────────────────────────────────────────
+# PADDING (ISO/IEC 7816-4)
+# ─────────────────────────────────────────────
+
+def pad(data: bytes, block_size: int = PAD_BLOCK) -> bytes:
+    """Apply ISO/IEC 7816-4 padding to hide true message length."""
+    pad_len = block_size - ((len(data) + 1) % block_size)
+    return data + b"\x80" + (b"\x00" * pad_len)
+
+
+def unpad(data: bytes) -> bytes:
+    """Strip ISO/IEC 7816-4 padding after decryption."""
+    idx = len(data) - 1
+    while idx >= 0:
+        if data[idx] == 0x80:
+            return data[:idx]
+        if data[idx] != 0x00:
+            break
+        idx -= 1
+    return data
+
+
+# ─────────────────────────────────────────────
+# SYMMETRIC ENCRYPTION (AES-256-GCM via OpenSSL)
+# ─────────────────────────────────────────────
+
+def derive_key_from_password(password: str, salt: bytes) -> bytes:
+    """
+    Derive a 256-bit AES key from a password using PBKDF2-HMAC-SHA256.
+    Uses OpenSSL's PBKDF2 implementation via the cryptography library.
+    """
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=PBKDF2_ITERATIONS,
+        backend=default_backend()
+    )
+    return kdf.derive(password.encode())
+
+
+def aes_encrypt(key: bytes, plaintext: bytes, apply_padding: bool = True) -> bytes:
+    """
+    Encrypt plaintext using AES-256-GCM (OpenSSL backend).
+    Output format: [1-byte pad_flag][12-byte IV][ciphertext+tag]
+    """
+    if apply_padding:
+        plaintext = pad(plaintext)
+
+    iv  = os.urandom(IV_BYTES)
+    aes = AESGCM(key)
+    ct  = aes.encrypt(iv, plaintext, None)  # None = no AAD
+    pad_flag = b"\x01" if apply_padding else b"\x00"
+    return pad_flag + iv + ct
+
+
+def aes_decrypt(key: bytes, payload: bytes) -> bytes:
+    """
+    Decrypt AES-256-GCM ciphertext.
+    Raises InvalidTag if the ciphertext has been tampered with.
+    """
+    pad_flag = payload[0]
+    iv       = payload[1:13]
+    ct       = payload[13:]
+    aes      = AESGCM(key)
+    plaintext = aes.decrypt(iv, ct, None)
+    if pad_flag == 1:
+        plaintext = unpad(plaintext)
+    return plaintext
+
+
+# ─────────────────────────────────────────────
+# HIGH-LEVEL ENCRYPT / DECRYPT
+# ─────────────────────────────────────────────
+
+def encrypt_e2ee(message: str, shared_key: bytes, apply_padding: bool = True) -> str:
+    """
+    Encrypt a message using the ECDH-derived shared key.
+    Returns a PS1E: prefixed base64 string.
+    """
+    payload = aes_encrypt(shared_key, message.encode("utf-8"), apply_padding)
+    return VERSION_E2EE.decode() + base64.b64encode(payload).decode()
+
+
+def decrypt_e2ee(ciphertext: str, shared_key: bytes) -> str:
+    """Decrypt a PS1E: message using the ECDH-derived shared key."""
+    if not ciphertext.startswith(VERSION_E2EE.decode()):
+        raise ValueError("Not a valid PS1E: message.")
+    payload = base64.b64decode(ciphertext[5:])
+    return aes_decrypt(shared_key, payload).decode("utf-8")
+
+
+def encrypt_password(message: str, password: str, apply_padding: bool = True) -> str:
+    """
+    Encrypt a message using a password (PBKDF2 + AES-256-GCM via OpenSSL).
+    Returns a PS1P: prefixed base64 string.
+    """
+    salt    = os.urandom(SALT_BYTES)
+    key     = derive_key_from_password(password, salt)
+    payload = aes_encrypt(key, message.encode("utf-8"), apply_padding)
+    # Prepend salt so it can be recovered at decryption time
+    return VERSION_PASS.decode() + base64.b64encode(salt + payload).decode()
+
+
+def decrypt_password(ciphertext: str, password: str) -> str:
+    """Decrypt a PS1P: message using the original password."""
+    if not ciphertext.startswith(VERSION_PASS.decode()):
+        raise ValueError("Not a valid PS1P: message.")
+    raw     = base64.b64decode(ciphertext[5:])
+    salt    = raw[:SALT_BYTES]
+    payload = raw[SALT_BYTES:]
+    key     = derive_key_from_password(password, salt)
+    return aes_decrypt(key, payload).decode("utf-8")
+
+
+# ─────────────────────────────────────────────
+# GNUPG INTEGRATION
+# ─────────────────────────────────────────────
+
+class GPGManager:
+    """
+    Wraps python-gnupg to provide a usable interface for key management
+    and alternative GPG-based encryption alongside the ECDH path.
+    """
+
+    def __init__(self, gpg_home: str = None):
+        if not GPG_AVAILABLE:
+            raise RuntimeError(
+                "python-gnupg is not installed. Run: pip3 install python-gnupg"
+            )
+        self.gpg = gnupg.GPG(gnupghome=gpg_home or os.path.expanduser("~/.gnupg"))
+
+    def list_keys(self, secret: bool = False) -> list:
+        """Return all keys in the GPG keyring."""
+        return self.gpg.list_keys(secret)
+
+    def generate_gpg_key(self, name: str, email: str, passphrase: str) -> str:
+        """
+        Generate a GPG key pair for identity management.
+        Returns the fingerprint of the new key.
+        """
+        input_data = self.gpg.gen_key_input(
+            key_type="RSA",
+            key_length=4096,
+            name_real=name,
+            name_email=email,
+            passphrase=passphrase,
+            expire_date="2y"
+        )
+        result = self.gpg.gen_key(input_data)
+        return str(result.fingerprint)
+
+    def export_public_key_gpg(self, fingerprint: str) -> str:
+        """Export a GPG public key as ASCII-armoured text."""
+        return self.gpg.export_keys(fingerprint)
+
+    def import_public_key_gpg(self, key_data: str) -> dict:
+        """Import a GPG public key from ASCII-armoured text."""
+        result = self.gpg.import_keys(key_data)
+        return {"imported": result.count, "fingerprints": result.fingerprints}
+
+    def encrypt_gpg(self, message: str, recipient_fingerprint: str) -> str:
+        """
+        Encrypt a message to a GPG recipient.
+        Uses the recipient's public key from the keyring.
+        """
+        result = self.gpg.encrypt(message, recipient_fingerprint, always_trust=True)
+        if not result.ok:
+            raise RuntimeError(f"GPG encryption failed: {result.status}")
+        return str(result)
+
+    def decrypt_gpg(self, ciphertext: str, passphrase: str) -> str:
+        """Decrypt a GPG-encrypted message using the private key passphrase."""
+        result = self.gpg.decrypt(ciphertext, passphrase=passphrase)
+        if not result.ok:
+            raise RuntimeError(f"GPG decryption failed: {result.status}")
+        return str(result)
+
+    def sign_message(self, message: str, key_fingerprint: str, passphrase: str) -> str:
+        """Sign a message with a GPG private key for non-repudiation."""
+        result = self.gpg.sign(message, keyid=key_fingerprint, passphrase=passphrase)
+        return str(result)
+
+    def verify_signature(self, signed_message: str) -> dict:
+        """Verify a GPG signature. Returns dict with trust level and signer info."""
+        result = self.gpg.verify(signed_message)
+        return {
+            "valid":       result.valid,
+            "fingerprint": result.fingerprint,
+            "username":    result.username,
+            "trust_level": result.trust_level,
+            "timestamp":   result.timestamp,
+        }
+
+
+# ─────────────────────────────────────────────
+# METADATA ANALYZER (imported from metadata_analyzer.py)
+# ─────────────────────────────────────────────
+
+def run_metadata_check(text: str) -> dict:
+    """
+    Inline metadata check without needing to import the separate module.
+    Returns dict with found items and a redacted version of the text.
+    """
+    import re
+
+    patterns = {
+        "Email address":     (r"\b[\w.+-]+@[\w-]+\.[a-z]{2,}\b",             "HIGH"),
+        "Phone number":      (r"(\+?\d[\d\s\-().]{6,}\d)",                    "HIGH"),
+        "IP address":        (r"\b(\d{1,3}\.){3}\d{1,3}\b",                  "HIGH"),
+        "Street address":    (r"\b\d+\s+[A-Z][a-z]+\s+(Street|St|Road|Rd|Avenue|Ave|Lane|Ln|Drive|Dr|Boulevard|Blvd)\b", "HIGH"),
+        "Postcode / ZIP":    (r"\b([A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}|\d{5}(-\d{4})?)\b", "HIGH"),
+        "Credit card":       (r"\b\d{4}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}\b", "HIGH"),
+        "Passport number":   (r"\b[A-Z]{1,2}\d{7,8}\b",                      "HIGH"),
+        "Full name pattern": (r"\b([A-Z][a-z]+\s[A-Z][a-z]+)\b",             "MEDIUM"),
+        "URL / domain":      (r"https?://[^\s]+|www\.[^\s]+",                 "MEDIUM"),
+        "Specific date":     (r"\b\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}\b",       "LOW"),
+    }
+
+    findings = {}
+    clean    = text
+
+    for label, (pattern, risk) in patterns.items():
+        matches = list(set(re.findall(pattern, text, re.IGNORECASE)))
+        if matches:
+            flat = [m if isinstance(m, str) else m[0] for m in matches]
+            findings[label] = {"risk": risk, "matches": flat}
+            clean = re.sub(pattern, "[REDACTED]", clean, flags=re.IGNORECASE)
+
+    return {"findings": findings, "redacted": clean}
+
+
+# ─────────────────────────────────────────────
+# CLI COMMAND HANDLERS
+# ─────────────────────────────────────────────
+
+def cmd_keygen(args):
+    head("ECDH Key Pair Generation (OpenSSL / P-256)")
+    priv, pub = generate_keypair()
+    password  = None
+
+    if args.protect:
+        pw1 = getpass.getpass("  Enter password to protect private key: ")
+        pw2 = getpass.getpass("  Confirm password: ")
+        if pw1 != pw2:
+            err("Passwords do not match.")
+            sys.exit(1)
+        password = pw1.encode()
+
+    save_keypair(priv, pub, args.output, password)
+    fp = fingerprint(pub)
+    info(f"Key fingerprint: {C.BOLD}{fp}{C.RESET}")
+    info("Share your fingerprint through a trusted channel to prevent MITM attacks.")
+
+
+def cmd_fingerprint(args):
+    head("Key Fingerprint")
+    with open(args.key, "r") as f:
+        pem = f.read()
+    pub = load_public_key(pem)
+    fp  = fingerprint(pub)
+    print(f"\n  {C.BOLD}{C.CYAN}{fp}{C.RESET}\n")
+    info("Compare this with your contact's fingerprint by phone or in person.")
+
+
+def cmd_encrypt(args):
+    head("Encryption (AES-256-GCM via OpenSSL)")
+
+    if args.file:
+        with open(args.file, "r", encoding="utf-8") as f:
+            message = f.read()
+    else:
+        message = args.message or input("  Message: ")
+
+    # Metadata check first
+    result = run_metadata_check(message)
+    if result["findings"]:
+        warn("Metadata risks detected in your message:")
+        for label, data in result["findings"].items():
+            risk_color = C.RED if data["risk"] == "HIGH" else C.YELLOW if data["risk"] == "MEDIUM" else C.GREEN
+            print(f"  {risk_color}[{data['risk']}]{C.RESET} {label}: {', '.join(data['matches'][:3])}")
+        print()
+        choice = input("  Use auto-redacted version? [y/N]: ").strip().lower()
+        if choice == "y":
+            message = result["redacted"]
+            ok("Using redacted message.")
+
+    no_pad = getattr(args, "no_pad", False)
+    apply_padding = not no_pad
+
+    if args.mode == "e2ee":
+        with open(args.their_pubkey, "r") as f:
+            peer_pem = f.read()
+        with open(args.my_privkey, "r") as f:
+            my_pem = f.read()
+        password_bytes = None
+        if args.key_password:
+            password_bytes = getpass.getpass("  Private key password: ").encode()
+        priv_key = load_private_key(my_pem, password_bytes)
+        peer_pub = load_public_key(peer_pem)
+        shared   = derive_shared_secret(priv_key, peer_pub)
+        ct       = encrypt_e2ee(message, shared, apply_padding)
+        ok(f"Encrypted with ECDH E2EE (PBKDF2 + AES-256-GCM / OpenSSL)")
+    else:
+        pw = getpass.getpass("  Encryption password: ")
+        ct = encrypt_password(message, pw, apply_padding)
+        ok(f"Encrypted with PBKDF2-SHA256 + AES-256-GCM ({PBKDF2_ITERATIONS:,} iterations / OpenSSL)")
+
+    if args.output_file:
+        with open(args.output_file, "w") as f:
+            f.write(ct)
+        ok(f"Ciphertext saved to: {args.output_file}")
+    else:
+        print(f"\n{C.DIM}{ct}{C.RESET}\n")
+
+
+def cmd_decrypt(args):
+    head("Decryption (AES-256-GCM via OpenSSL)")
+
+    if args.file:
+        with open(args.file, "r") as f:
+            ciphertext = f.read().strip()
+    else:
+        ciphertext = args.ciphertext or input("  Ciphertext: ").strip()
+
+    if ciphertext.startswith("PS1E:"):
+        with open(args.my_privkey, "r") as f:
+            my_pem = f.read()
+        with open(args.their_pubkey, "r") as f:
+            peer_pem = f.read()
+        password_bytes = None
+        if args.key_password:
+            password_bytes = getpass.getpass("  Private key password: ").encode()
+        priv_key  = load_private_key(my_pem, password_bytes)
+        peer_pub  = load_public_key(peer_pem)
+        shared    = derive_shared_secret(priv_key, peer_pub)
+        plaintext = decrypt_e2ee(ciphertext, shared)
+        ok("Decrypted using ECDH shared key (AES-256-GCM / OpenSSL)")
+    elif ciphertext.startswith("PS1P:"):
+        pw        = getpass.getpass("  Decryption password: ")
+        plaintext = decrypt_password(ciphertext, pw)
+        ok("Decrypted using PBKDF2 password key (AES-256-GCM / OpenSSL)")
+    else:
+        err("Unknown format. Message must start with PS1E: or PS1P:")
+        sys.exit(1)
+
+    print(f"\n{C.GREEN}Plaintext:{C.RESET}\n{plaintext}\n")
+
+    if args.check_metadata:
+        result = run_metadata_check(plaintext)
+        if result["findings"]:
+            warn("Metadata found in decrypted message:")
+            for label, data in result["findings"].items():
+                risk_color = C.RED if data["risk"] == "HIGH" else C.YELLOW
+                print(f"  {risk_color}[{data['risk']}]{C.RESET} {label}: {', '.join(data['matches'][:3])}")
+
+
+def cmd_metadata(args):
+    head("Metadata Analyzer")
+
+    if args.file:
+        with open(args.file, "r", encoding="utf-8") as f:
+            text = f.read()
+    else:
+        text = args.text or input("  Paste message text:\n> ")
+
+    result = run_metadata_check(text)
+
+    if not result["findings"]:
+        ok("No metadata risks detected. Message appears clean.")
+        return
+
+    high = sum(1 for v in result["findings"].values() if v["risk"] == "HIGH")
+    med  = sum(1 for v in result["findings"].values() if v["risk"] == "MEDIUM")
+    low  = sum(1 for v in result["findings"].values() if v["risk"] == "LOW")
+
+    warn(f"Found {len(result['findings'])} risk type(s): {high} HIGH, {med} MEDIUM, {low} LOW\n")
+
+    for label, data in result["findings"].items():
+        risk_color = C.RED if data["risk"] == "HIGH" else C.YELLOW if data["risk"] == "MEDIUM" else C.GREEN
+        matches_str = ", ".join(f'"{m}"' for m in data["matches"][:3])
+        if len(data["matches"]) > 3:
+            matches_str += f" ... +{len(data['matches']) - 3} more"
+        print(f"  {risk_color}[{data['risk']:6s}]{C.RESET} {label:<25} {C.DIM}{matches_str}{C.RESET}")
+
+    if args.redact:
+        print(f"\n{C.CYAN}Redacted version:{C.RESET}")
+        print(result["redacted"])
+        if args.output_file:
+            with open(args.output_file, "w") as f:
+                f.write(result["redacted"])
+            ok(f"Redacted version saved to: {args.output_file}")
+
+
+def cmd_gpg(args):
+    head("GnuPG Integration")
+    if not GPG_AVAILABLE:
+        err("python-gnupg not installed. Run: pip3 install python-gnupg")
+        sys.exit(1)
+
+    mgr = GPGManager()
+
+    if args.gpg_action == "genkey":
+        name   = args.name  or input("  Full name: ")
+        email  = args.email or input("  Email: ")
+        pw     = getpass.getpass("  GPG key passphrase: ")
+        info("Generating 4096-bit RSA GPG key pair...")
+        fp = mgr.generate_gpg_key(name, email, pw)
+        ok(f"GPG key generated. Fingerprint: {fp}")
+
+    elif args.gpg_action == "list":
+        keys = mgr.list_keys(secret=args.secret)
+        if not keys:
+            info("No keys found in keyring.")
+            return
+        for k in keys:
+            uids = ", ".join(k.get("uids", []))
+            print(f"  {C.CYAN}{k['fingerprint']}{C.RESET}  {uids}")
+
+    elif args.gpg_action == "export":
+        pub_key = mgr.export_public_key_gpg(args.fingerprint)
+        if args.output_file:
+            with open(args.output_file, "w") as f:
+                f.write(pub_key)
+            ok(f"GPG public key exported to: {args.output_file}")
+        else:
+            print(pub_key)
+
+    elif args.gpg_action == "import":
+        with open(args.key_file, "r") as f:
+            key_data = f.read()
+        result = mgr.import_public_key_gpg(key_data)
+        ok(f"Imported {result['imported']} key(s): {result['fingerprints']}")
+
+    elif args.gpg_action == "encrypt":
+        message = input("  Message to encrypt:\n> ")
+        ct = mgr.encrypt_gpg(message, args.recipient)
+        if args.output_file:
+            with open(args.output_file, "w") as f:
+                f.write(ct)
+            ok(f"GPG-encrypted message saved to: {args.output_file}")
+        else:
+            print(ct)
+
+    elif args.gpg_action == "decrypt":
+        with open(args.file, "r") as f:
+            ct = f.read()
+        pw = getpass.getpass("  GPG passphrase: ")
+        plaintext = mgr.decrypt_gpg(ct, pw)
+        print(f"\n{C.GREEN}Decrypted:{C.RESET}\n{plaintext}\n")
+
+    elif args.gpg_action == "sign":
+        message = input("  Message to sign:\n> ")
+        pw = getpass.getpass("  GPG passphrase: ")
+        signed = mgr.sign_message(message, args.fingerprint, pw)
+        if args.output_file:
+            with open(args.output_file, "w") as f:
+                f.write(signed)
+            ok(f"Signed message saved to: {args.output_file}")
+
+    elif args.gpg_action == "verify":
+        with open(args.file, "r") as f:
+            signed = f.read()
+        result = mgr.verify_signature(signed)
+        if result["valid"]:
+            ok(f"Signature VALID")
+            info(f"Signed by : {result['username']}")
+            info(f"Fingerprint: {result['fingerprint']}")
+            info(f"Trust level: {result['trust_level']}")
+        else:
+            err("Signature INVALID or unverified.")
+
+
+# ─────────────────────────────────────────────
+# ARGUMENT PARSER
+# ─────────────────────────────────────────────
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="privacyshield",
+        description="PrivacyShield v3 — usable E2EE and metadata protection (Python/OpenSSL/GnuPG)"
+    )
+    sub = p.add_subparsers(dest="command")
+
+    # keygen
+    kg = sub.add_parser("keygen", help="Generate an ECDH P-256 key pair (OpenSSL)")
+    kg.add_argument("-o", "--output",  default="./keys", help="Directory to save key files")
+    kg.add_argument("--protect",       action="store_true", help="Password-protect the private key")
+
+    # fingerprint
+    fp_p = sub.add_parser("fingerprint", help="Compute SHA-256 fingerprint of a public key")
+    fp_p.add_argument("key", help="Path to public key PEM file")
+
+    # encrypt
+    en = sub.add_parser("encrypt", help="Encrypt a message (E2EE or password)")
+    en.add_argument("-m", "--message",      help="Message string to encrypt")
+    en.add_argument("-f", "--file",         help="File containing the message")
+    en.add_argument("-o", "--output-file",  help="Write ciphertext to file")
+    en.add_argument("--mode",              choices=["e2ee","password"], default="e2ee")
+    en.add_argument("--my-privkey",        help="Your private key PEM (E2EE mode)")
+    en.add_argument("--their-pubkey",      help="Recipient public key PEM (E2EE mode)")
+    en.add_argument("--key-password",      action="store_true", help="Private key is password-protected")
+    en.add_argument("--no-pad",            action="store_true", help="Disable ISO/IEC 7816-4 padding")
+
+    # decrypt
+    de = sub.add_parser("decrypt", help="Decrypt a message")
+    de.add_argument("-c", "--ciphertext",   help="Ciphertext string")
+    de.add_argument("-f", "--file",         help="File containing ciphertext")
+    de.add_argument("--my-privkey",        help="Your private key PEM (E2EE mode)")
+    de.add_argument("--their-pubkey",      help="Sender public key PEM (E2EE mode)")
+    de.add_argument("--key-password",      action="store_true")
+    de.add_argument("--check-metadata",    action="store_true", help="Scan decrypted text for PII")
+
+    # metadata
+    mt = sub.add_parser("metadata", help="Scan text for personally identifying information")
+    mt.add_argument("-t", "--text",         help="Text string to analyse")
+    mt.add_argument("-f", "--file",         help="File to analyse")
+    mt.add_argument("-r", "--redact",       action="store_true", help="Print redacted version")
+    mt.add_argument("-o", "--output-file",  help="Save redacted version to file")
+
+    # gpg
+    gp = sub.add_parser("gpg", help="GnuPG key management and encryption")
+    gp.add_argument("gpg_action",
+                    choices=["genkey","list","export","import","encrypt","decrypt","sign","verify"])
+    gp.add_argument("--name",         help="Name for key generation")
+    gp.add_argument("--email",        help="Email for key generation")
+    gp.add_argument("--fingerprint",  help="GPG key fingerprint")
+    gp.add_argument("--recipient",    help="Recipient fingerprint for encryption")
+    gp.add_argument("--key-file",     help="Key file for import")
+    gp.add_argument("--file", "-f",   help="Input file")
+    gp.add_argument("--output-file",  help="Output file")
+    gp.add_argument("--secret",       action="store_true", help="List secret keys")
+
+    return p
+
+
+def main():
+    banner()
+    parser = build_parser()
+    args   = parser.parse_args()
+
+    dispatch = {
+        "keygen":      cmd_keygen,
+        "fingerprint": cmd_fingerprint,
+        "encrypt":     cmd_encrypt,
+        "decrypt":     cmd_decrypt,
+        "metadata":    cmd_metadata,
+        "gpg":         cmd_gpg,
+    }
+
+    if args.command not in dispatch:
+        parser.print_help()
+        sys.exit(0)
+
+    dispatch[args.command](args)
+
+
+if __name__ == "__main__":
+    main()
